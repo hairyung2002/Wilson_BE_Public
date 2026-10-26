@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 비밀값(wilson-backend-secret, wilson-fcm)은 레포에 두지 않는다. TLS 인증서는 ACM이 관리한다 (결정 I4).
+# 만드는 법은 secret.example.yaml 참고 (kustomize 리소스에 포함하지 않음).
+resources:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml

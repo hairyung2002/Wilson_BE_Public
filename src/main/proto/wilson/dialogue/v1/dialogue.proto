@@ -1,0 +1,106 @@
+// AI 서버 대화 응답 채널 계약.
+// 원본: AI 레포 wilson_chatbot/proto/wilson/dialogue/v1/dialogue.proto (main ba02914 기준)
+// 2026-10-22부터 이 파일이 계약 원본이다 (decisions.md J, docs/ai-integration-contract.md 1장).
+// AI 레포는 이 파일을 그대로 복사해 쓴다. 기존 필드 번호는 바꾸지 않는다.
+// BE 추가분: AudioRequest.history(8)·address_term(9), HistoryTurn, StreamResponse.emergency(5), EmergencyFrame,
+//            EmergencyCategory, SpeakRequest, rpc Speak. 새 필드·RPC라 AI가 아직 몰라도 기존 동작은 그대로다.
+// java_* 옵션은 BE 코드 생성용이며 와이어 포맷에 영향이 없다.
+syntax = "proto3";
+
+package wilson.dialogue.v1;
+
+option java_multiple_files = true;
+option java_package = "com.piuda.wilson.infrastructure.grpc.dialogue.v1";
+
+// 백엔드(클라이언트) → AI 서버(서버) : 단일 호출(Unary 입력)
+message AudioRequest {
+  bytes  audio_payload  = 1;  // 사용자 발화 오디오 원본 (메모리 적재, 단일 전달)
+  string trace_id       = 2;  // 분산 추적용 요청 식별자
+  string target_user_id = 3;  // 노인 가명 식별자(elderly.subject_id, UUID). 노인 PK가 아님
+  string session_id     = 4;  // 대화 세션 식별자 (BE conversation.id)
+  string turn_id        = 5;  // 대화 턴 식별자(UUID, BE 생성). 인지지표와의 조인 키
+  string audio_format   = 6;  // 코덱 힌트("wav","ogg"). 신뢰 소스 아님, AI가 실제 바이트로 판별(WAV-PCM/OGG-OPUS만 지원)
+  string language_code  = 7;  // "ko-KR" 고정 (AI settings.language_code 기본값과 동일)
+  repeated HistoryTurn history = 8;  // [J6] 같은 대화의 직전 턴들(오래된 순, 최대 10턴). AI는 반드시 LLM 입력에 넣는다
+  string address_term   = 9;  // [J7] 답변에서 어르신을 부르는 말 "할머니" | "할아버지" | "어르신". 실명은 보내지 않는다
+}
+
+// 대화 맥락 한 턴. 필드명은 rag.proto ConversationTurn과 같다.
+// BE가 Redis(입력마다 TTL 연장)에 보관하고, 만료되면 DB 대화 이력에서 다시 채운다.
+message HistoryTurn {
+  string turn_id           = 1;
+  string stt_text          = 2;  // 노인 발화. 선제 안부 턴이면 빈 값
+  string llm_response_text = 3;  // AI 발화
+}
+
+// [J4] 선제 안부 읽기. BE가 정한 문장을 Wilson 목소리로 읽기만 한다 (LLM·RAG를 거치지 않는다).
+message SpeakRequest {
+  string trace_id       = 1;
+  string target_user_id = 2;
+  string session_id     = 3;
+  string turn_id        = 4;
+  string text           = 5;  // AI는 바꾸지 않고 그대로 읽는다
+  string language_code  = 6;
+}
+
+// AI 서버 → 백엔드 : 서버 스트리밍 출력 단위
+message StreamResponse {
+  oneof payload {
+    MetadataFrame   metadata    = 1;  // 프레임 1 (스트림 시작). Speak에서는 보내지 않는다
+    AudioChunk      audio_chunk = 2;  // 프레임 2~N (TTS 바이트 조각)
+    CompletionFrame completion  = 3;  // 프레임 N+1 (정상 종료)
+    ErrorFrame      error       = 4;  // 실패 종료
+    EmergencyFrame  emergency   = 5;  // [J5] MetadataFrame 바로 다음, 응급을 감지했을 때만
+  }
+}
+
+// 프레임 1: 스트림 시작 시 STT 결과 선전송
+message MetadataFrame {
+  string stt_text = 1;  // 사용자 발화 STT 원문. BE가 RDBMS에 적재
+}
+
+// 프레임 2~N: TTS 오디오 청크
+message AudioChunk {
+  bytes  data        = 1;  // 오디오 바이트 조각
+  uint32 sequence    = 2;  // 청크 순번(앱 재생 순서 보장용)
+}
+
+// 프레임 N+1: 정상 종료
+message CompletionFrame {
+  string full_llm_response_text = 1;  // 완성된 AI 답변 전체 텍스트. BE가 RDBMS에 적재. Speak면 요청 text
+}
+
+// 실패 종료 (스트림 강제 중단 대신 사용)
+message ErrorFrame {
+  ErrorStage error_stage              = 1;  // 실패 발생 단계
+  bool       recoverable              = 2;  // 부분 재생분 유효 여부(앱 폴백 판단용)
+  string     full_llm_response_text   = 3;  // LLM 텍스트가 완성됐다면 전달(대화 이력 보존). 없으면 빈 값
+}
+
+enum ErrorStage {
+  ERROR_STAGE_UNSPECIFIED = 0;
+  ERROR_STAGE_STT         = 1;  // STT 단계 실패
+  ERROR_STAGE_LLM         = 2;  // 답변 생성 단계 실패
+  ERROR_STAGE_TTS         = 3;  // 음성 변환 단계 실패
+}
+
+// [J5] 응급 감지. 감지 후에도 답변(AudioChunk → CompletionFrame)은 평소처럼 이어서 보낸다.
+message EmergencyFrame {
+  EmergencyCategory category = 1;
+}
+
+enum EmergencyCategory {
+  EMERGENCY_CATEGORY_UNSPECIFIED  = 0;
+  EMERGENCY_CATEGORY_FALL         = 1;  // 낙상
+  EMERGENCY_CATEGORY_PAIN         = 2;  // 통증
+  EMERGENCY_CATEGORY_BREATHING    = 3;  // 호흡
+  EMERGENCY_CATEGORY_HELP_REQUEST = 4;  // 도움 요청
+  EMERGENCY_CATEGORY_OTHER        = 5;
+}
+
+service DialogueService {
+  // 단일 오디오 입력 → 서버 스트리밍 응답
+  rpc Converse(AudioRequest) returns (stream StreamResponse);
+  // [J4] 텍스트 → TTS 음성 스트림: AudioChunk… → CompletionFrame. TTS 실패는 ErrorFrame(TTS)
+  rpc Speak(SpeakRequest) returns (stream StreamResponse);
+}

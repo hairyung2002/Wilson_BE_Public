@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wilson-backend
+  annotations:
+    # AWS Load Balancer Controller가 ALB를 만든다 (결정 I4).
+    # TLS는 ALB에서 ACM 인증서로 끝내고(HTTPS·WSS) BE로는 HTTP/1.1로 보낸다 (결정 I2). 인증서는 K8s Secret에 두지 않는다
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    # 환경별 overlay에서 실제 ACM 인증서 ARN으로 패치한다
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:000000000000:certificate/replace-me
+    # 음성 대화 WebSocket이 말 사이 침묵에 끊기지 않도록 유휴 타임아웃을 대화 길이 이상으로 둔다 (기본 60초)
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=3600
+    # Pod가 트래픽을 받을 준비가 됐는지는 readiness 프로브와 같은 경로로 본다
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health/readiness
+spec:
+  ingressClassName: alb
+  # 호스트는 환경별 overlay에서 패치한다
+  rules:
+    - host: api.wilson.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wilson-backend
+                port:
+                  name: http

@@ -1,0 +1,117 @@
+spring:
+  application:
+    name: wilson
+
+  datasource:
+    url: jdbc:h2:mem:wilson;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: false
+
+  h2:
+    console:
+      enabled: true
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: wilson
+      # BE가 처음 붙거나 오래 내려가 있던 동안 AI가 보낸 지표도 놓치지 않도록 처음부터 읽는다
+      auto-offset-reset: earliest
+    admin:
+      # BE → AI 토픽(보관 기간·메시지 크기 포함)을 앱이 만든다. 로컬은 Kafka 없이 띄우므로 끈다
+      auto-create: ${KAFKA_TOPIC_AUTO_CREATE:false}
+
+jwt:
+  secret: ${JWT_SECRET:wilson-dev-secret-key-must-be-at-least-256-bits-long-0123456789}
+  expiration-millis: ${JWT_EXPIRATION_MILLIS:3600000}
+  refresh-expiration-millis: ${JWT_REFRESH_EXPIRATION_MILLIS:1209600000}
+
+server:
+  servlet:
+    context-parameters:
+      # 음성 WebSocket 프레임 최대 크기 (docs/websocket-voice-protocol.md)
+      "[org.apache.tomcat.websocket.binaryBufferSize]": 524288
+      "[org.apache.tomcat.websocket.textBufferSize]": 8192
+  # Ingress 뒤에서 X-Forwarded-For로 실제 클라이언트 IP를 쓴다 (기기 로그인 시도 제한, api-spec 17장)
+  # 로컬에서는 프록시가 없으므로 기본값(none), K8s ConfigMap에서 native로 켠다
+  forward-headers-strategy: ${SERVER_FORWARD_HEADERS_STRATEGY:none}
+
+# K8s liveness·readiness 프로브만 연다 (/actuator/health/liveness, /readiness). 상세 정보는 노출하지 않는다
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+wilson:
+  ai:
+    grpc:
+      # 운영(K8s): dns:///orchestrator-server-headless.<namespace>.svc.cluster.local:50051
+      target: ${AI_GRPC_TARGET:dns:///localhost:50051}
+      load-balancing-policy: round_robin
+      # 첫 프레임(MetadataFrame)은 AI의 STT 직후 온다. AI STT 타임아웃(15s)보다 짧으면
+      # AI가 아직 처리 중인데 BE가 끊고 재시도해 STT가 중복 호출된다.
+      first-frame-timeout: 20s
+      # STT(≤15s) + RAG + LLM 전체 생성 + 문장별 TTS(문장당 ≤15s)가 한 스트림 안에 끝나야 한다.
+      stream-deadline: 60s
+      max-attempts: 3
+      initial-backoff: 200ms
+      language-code: ko-KR
+  conversation:
+    context:
+      # 마지막 발화 이후 맥락을 Redis에 남기는 시간. 발화마다 다시 늘어난다 (Sliding Expiration).
+      # 만료돼도 원본(DB 대화 이력)에서 다시 채우므로 맥락은 사라지지 않는다.
+      ttl: 30m
+      max-turns: 10
+  push:
+    fcm:
+      # 끄면 푸시를 보내지 않고 기록만 남긴다 (로컬). 운영은 K8s Secret으로 서비스 계정 JSON을 파일 마운트.
+      enabled: ${FCM_ENABLED:false}
+      project-id: ${FCM_PROJECT_ID:}
+      credentials-path: ${FCM_CREDENTIALS_PATH:}
+  kafka:
+    cognitive-metrics:
+      # 계약: docs/kafka-cognitive-metrics.md
+      topic: wilson.cognitive-metrics.v1
+      # 로컬(H2)은 Kafka 없이 띄우므로 기본 꺼 둔다. postgres 프로필(운영)은 켠다.
+      auto-startup: ${KAFKA_LISTENER_AUTO_STARTUP:false}
+    conversation-summaries:
+      # AI → BE 보호자용 대화 요약 (docs/ai-integration-contract.md 4장)
+      topic: wilson.conversation-summaries.v1
+      auto-startup: ${KAFKA_LISTENER_AUTO_STARTUP:false}
+    ai-events:
+      # BE → AI Protobuf 이벤트 (docs/ai-integration-contract.md 0장)
+      # 로컬(H2)은 Kafka 없이 띄우므로 끄고 기록만 남긴다. postgres 프로필(운영)은 켠다.
+      enabled: ${KAFKA_AI_EVENTS_ENABLED:false}
+      turn-analysis-topic: wilson.turn-analysis.v1
+      conversation-ended-topic: wilson.conversation-ended.v1
+      subject-erasure-topic: wilson.subject-erasure.v1
+      ack-timeout: 10s
+      partitions: ${KAFKA_TOPIC_PARTITIONS:3}
+      replicas: ${KAFKA_TOPIC_REPLICAS:1}
+
+logging:
+  level:
+    com.piuda.wilson: DEBUG

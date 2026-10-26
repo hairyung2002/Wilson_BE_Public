@@ -1,0 +1,33 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/wilson}
+    username: ${DB_USERNAME:wilson}
+    password: ${DB_PASSWORD:wilson}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  kafka:
+    admin:
+      auto-create: ${KAFKA_TOPIC_AUTO_CREATE:true}
+
+wilson:
+  kafka:
+    cognitive-metrics:
+      auto-startup: ${KAFKA_LISTENER_AUTO_STARTUP:true}
+    conversation-summaries:
+      auto-startup: ${KAFKA_LISTENER_AUTO_STARTUP:true}
+    ai-events:
+      enabled: ${KAFKA_AI_EVENTS_ENABLED:true}

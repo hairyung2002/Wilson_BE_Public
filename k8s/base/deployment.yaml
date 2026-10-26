@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wilson-backend
+spec:
+  # 여러 Pod여도 스케줄러·일별 배치는 Redis 락으로 한 Pod만, Flyway는 DB 락으로 한 번만 실행된다
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wilson-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wilson-backend
+    spec:
+      # 진행 중인 음성 대화(WebSocket)가 정리될 시간
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: wilson-backend
+          image: wilson/backend:dev
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: wilson-backend-config
+            # DB_URL, DB_USERNAME, DB_PASSWORD, JWT_SECRET (+ 사용 시 SPRING_DATA_REDIS_PASSWORD)
+            - secretRef:
+                name: wilson-backend-secret
+          volumeMounts:
+            - name: fcm-credentials
+              mountPath: /var/secrets/fcm
+              readOnly: true
+          # Flyway 마이그레이션·JPA 초기화가 끝날 때까지 liveness를 미룬다
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: fcm-credentials
+          secret:
+            secretName: wilson-fcm
+            items:
+              - key: service-account.json
+                path: service-account.json

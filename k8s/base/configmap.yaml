@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wilson-backend-config
+data:
+  SPRING_PROFILES_ACTIVE: postgres
+  TZ: Asia/Seoul
+  # Ingress 뒤에서 실제 클라이언트 IP 사용 (기기 로그인 시도 제한)
+  SERVER_FORWARD_HEADERS_STRATEGY: native
+  # 같은 네임스페이스의 AI orchestrator. Pod별로 나눠 보내도록 headless 서비스 + round_robin (결정 I2, 내부 h2c)
+  AI_GRPC_TARGET: dns:///orchestrator-server-headless:50051
+  # 아래 주소·ID는 환경별 overlay에서 패치한다
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KAFKA_LISTENER_AUTO_STARTUP: "true"
+  # BE → AI 이벤트(턴 분석·대화 종료·파기, 결정 J1~J3). 토픽은 앱이 만들며 복제 수는 클러스터 브로커 수에 맞춘다
+  KAFKA_AI_EVENTS_ENABLED: "true"
+  KAFKA_TOPIC_AUTO_CREATE: "true"
+  KAFKA_TOPIC_PARTITIONS: "3"
+  KAFKA_TOPIC_REPLICAS: "3"
+  SPRING_DATA_REDIS_HOST: redis
+  FCM_ENABLED: "true"
+  FCM_PROJECT_ID: wilson-fcm-project
+  FCM_CREDENTIALS_PATH: /var/secrets/fcm/service-account.json

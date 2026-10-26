@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 같은 브랜치에 새로 push하면 이전 실행은 취소한다.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # 운영 컨테이너(Dockerfile·k8s ConfigMap)와 같은 시간대로 테스트한다.
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Gradle 의존성·빌드 캐시
+      - uses: gradle/actions/setup-gradle@v4
+
+      # gradlew가 실행 권한 없이(100644) 커밋되어 있다.
+      - run: chmod +x gradlew
+
+      # Redis는 테스트에서 mock, Kafka는 내장 브로커를 쓰므로 별도 서비스가 필요 없다.
+      - run: ./gradlew build
+
+      - name: 테스트 리포트 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: build/reports/tests/test
+          retention-days: 7

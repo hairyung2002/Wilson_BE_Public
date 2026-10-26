@@ -1,0 +1,52 @@
+// BE → AI Kafka 이벤트 계약 (결정 J1~J3·J8, docs/ai-integration-contract.md 2·3·5장).
+// 이 파일이 계약 원본이다. AI 레포는 그대로 복사해 쓰고, 바꿀 일이 있으면 BE와 먼저 합의한다.
+// 토픽 value는 메시지를 그대로 직렬화한 바이트다 (헤더·래퍼 없음). key는 토픽별로 계약 0장을 따른다.
+// java_* 옵션은 BE 코드 생성용이며 와이어 포맷에 영향이 없다.
+syntax = "proto3";
+
+package wilson.events.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "com.piuda.wilson.infrastructure.kafka.events.v1";
+
+// 토픽 wilson.turn-analysis.v1 (key: turn_id, 보관 24시간)
+// AI 답변이 끝난 뒤(정상·실패) 노인 발화가 인식된 턴마다 1건. 분석 워커가 지표를 계산해
+// wilson.cognitive-metrics.v1로 돌려준다 (turn_id를 그대로 쓴다).
+message TurnAnalysisRequested {
+  string trace_id          = 1;
+  string turn_id           = 2;
+  string target_user_id    = 3;  // 노인 가명 식별자(elderly.subject_id)
+  string session_id        = 4;  // BE conversation.id
+  bytes  audio_payload     = 5;  // Converse에 보낸 것과 같은 노인 발화 원본
+  string audio_format      = 6;  // "wav" | "ogg"
+  string stt_text          = 7;
+  string llm_response_text = 8;  // 답변 생성에 실패했으면 빈 값
+  google.protobuf.Timestamp occurred_at = 9;
+}
+
+// 토픽 wilson.conversation-ended.v1 (key: session_id, 보관 24시간)
+// 대화가 끝날 때 1건 (종료 API, 새 대화 시작 시 이전 대화 자동 종료). 턴이 없으면 보내지 않는다.
+message ConversationEnded {
+  string trace_id       = 1;
+  string target_user_id = 2;
+  string session_id     = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp ended_at   = 5;
+  repeated ConversationTurn turns      = 6;  // 오래된 순
+}
+
+message ConversationTurn {
+  string turn_id           = 1;
+  string stt_text          = 2;  // 노인 발화. 선제 안부 턴이면 빈 값
+  string llm_response_text = 3;  // AI 발화
+}
+
+// 토픽 wilson.subject-erasure.v1 (key: target_user_id, 보관 7일)
+// 노인 삭제 시 1건. BE는 브로커가 받을 때까지 다시 보낸다 (같은 요청이 여러 번 올 수 있다).
+message SubjectErasureRequested {
+  string trace_id       = 1;
+  string target_user_id = 2;  // 파기할 subject_id (삭제 전 값)
+  google.protobuf.Timestamp requested_at = 3;
+}
